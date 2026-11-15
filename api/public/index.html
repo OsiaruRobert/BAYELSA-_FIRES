@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Fire detections</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font: 14px/1.4 system-ui, sans-serif;
+        }
+
+        #map {
+            position: absolute;
+            inset: 0;
+        }
+
+        .panel {
+            position: absolute;
+            z-index: 1000;
+            top: 12px;
+            left: 12px;
+            background: rgba(255, 255, 255, .95);
+            border-radius: 8px;
+            padding: 10px 12px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, .2);
+            max-width: 320px;
+        }
+
+        .panel h1 {
+            font-size: 15px;
+            margin: 0 0 6px;
+        }
+
+        .panel .row {
+            display: flex;
+            justify-content: space-between;
+            gap: 8px;
+        }
+
+        .panel .muted {
+            color: #666;
+            font-size: 12px;
+        }
+
+        .panel button {
+            margin-top: 8px;
+            width: 100%;
+            padding: 6px 8px;
+            cursor: pointer;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            background: #fafafa;
+        }
+
+        .panel button:hover {
+            background: #f0f0f0;
+        }
+
+        .err {
+            color: #b00020;
+            font-size: 12px;
+            margin-top: 6px;
+            white-space: pre-wrap;
+        }
+
+        .legend {
+            position: absolute;
+            z-index: 1000;
+            bottom: 12px;
+            left: 12px;
+            background: rgba(255, 255, 255, .95);
+            border-radius: 8px;
+            padding: 8px 10px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, .2);
+            font-size: 12px;
+        }
+
+        .legend span {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            margin-right: 10px;
+        }
+
+        .dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="map"></div>
+
+    <div class="panel">
+        <h1>Fire detections</h1>
+        <div class="row"><span class="muted">Total</span><strong id="total">–</strong></div>
+        <div class="row"><span class="muted">New this run</span><strong id="new">–</strong></div>
+        <div class="row"><span class="muted">Fetched</span><span id="time" class="muted">–</span></div>
+        <div class="row"><span class="muted">Area</span><span id="area" class="muted">–</span></div>
+        <button id="refresh">Refresh now</button>
+        <div id="err" class="err"></div>
+    </div>
+
+    <div class="legend">
+        <span><i class="dot" style="background:#e53935"></i>high</span>
+        <span><i class="dot" style="background:#fb8c00"></i>nominal</span>
+        <span><i class="dot" style="background:#fdd835"></i>low</span>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        const BAYELSA_CENTER = [5.0, 6.0];
+
+        const map = L.map("map", { zoomControl: true }).setView(BAYELSA_CENTER, 8);
+
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+            maxZoom: 19,
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+        }).addTo(map);
+
+        const fireLayer = L.layerGroup().addTo(map);
+        let boundsLayer = null;
+        let firstFit = true;
+
+        const colorFor = (c) =>
+            c === "h" ? "#e53935" : c === "n" ? "#fb8c00" : "#fdd835";
+
+        function fitTo(latlngs, bboxStr) {
+            if (latlngs.length) {
+                map.fitBounds(L.latLngBounds(latlngs).pad(0.25));
+                return;
+            }
+            // Fallback: fit the configured bbox rectangle
+            if (bboxStr) {
+                const [s, w, n, e] = bboxStr.split(",").map(Number);
+                if ([s, w, n, e].every(Number.isFinite)) {
+                    map.fitBounds(L.latLngBounds([s, w], [n, e]));
+                }
+            }
+        }
+
+        function drawBbox(bboxStr) {
+            if (boundsLayer) { boundsLayer.remove(); boundsLayer = null; }
+            if (!bboxStr) return;
+            const [s, w, n, e] = bboxStr.split(",").map(Number);
+            if (![s, w, n, e].every(Number.isFinite)) return;
+            boundsLayer = L.rectangle([[s, w], [n, e]], {
+                color: "#1e88e5", weight: 1, fill: false, dashArray: "4 4"
+            }).addTo(map);
+        }
+
+        async function load() {
+            const errEl = document.getElementById("err");
+            errEl.textContent = "";
+            try {
+                const r = await fetch("/fires", { cache: "no-store" });
+                const data = await r.json();
+
+                if (data.error) throw new Error(data.error);
+
+                document.getElementById("total").textContent = data.count;
+                document.getElementById("new").textContent = data.new_count;
+                document.getElementById("area").textContent = data.area || "–";
+                document.getElementById("time").textContent =
+                    data.fetched_at ? new Date(data.fetched_at).toLocaleTimeString() : "–";
+
+                fireLayer.clearLayers();
+                const latlngs = [];
+
+                for (const f of data.fires) {
+                    const ll = [f.latitude, f.longitude];
+                    latlngs.push(ll);
+                    const color = colorFor(f.confidence);
+
+                    // Marker radius scales a bit with FRP, capped so it stays clickable
+                    const radius = Math.max(6, Math.min(18, 6 + (f.frp_mw || 0) / 5));
+
+                    L.circleMarker(ll, {
+                        radius,
+                        color,
+                        weight: 1,
+                        fillColor: color,
+                        fillOpacity: 0.55
+                    })
+                        .bindPopup(`
+          <strong>${f.satellite || "fire"}</strong>${f.is_new ? " · <em>new</em>" : ""}<br>
+          <b>${f.latitude.toFixed(4)}, ${f.longitude.toFixed(4)}</b><br>
+          Brightness: ${f.brightness_k ?? "–"} K<br>
+          FRP: ${f.frp_mw ?? "–"} MW<br>
+          Confidence: ${f.confidence ?? "–"}<br>
+          Acquired: ${f.acquired_at ? f.acquired_at.replace("T", " ").replace("Z", " UTC") : "–"}
+        `)
+                        .addTo(fireLayer);
+                }
+
+                drawBbox(data.area);
+
+                if (firstFit) {
+                    fitTo(latlngs, data.area);
+                    firstFit = false;
+                }
+            } catch (e) {
+                errEl.textContent = e.message;
+            }
+        }
+
+        document.getElementById("refresh").addEventListener("click", load);
+
+        load();
+        setInterval(load, 60_000); // auto-refresh every minute
+    </script>
+</body>
+
+</html>
