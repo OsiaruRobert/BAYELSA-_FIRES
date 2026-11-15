@@ -115,6 +115,7 @@ async function checkFires() {
       satellite: row.satellite ?? null,
     };
 
+    
     if (TARGET_WEBHOOK_URL) {
       try {
         const webhookRes = await fetch(TARGET_WEBHOOK_URL, {
