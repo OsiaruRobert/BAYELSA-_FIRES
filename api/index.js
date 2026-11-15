@@ -104,11 +104,11 @@ async function checkFires() {
   }
 }
 
-app.get("/", (req, res) => {
+app.get("/", async (req, res) => {
   try {
 
 
-    const data = checkFires();
+    const data = await checkFires();
     res.json(data);
   } catch (error) {
     res.json({
