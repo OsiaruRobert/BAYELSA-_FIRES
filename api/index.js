@@ -8,7 +8,6 @@ if (!FIRMS_MAP_KEY) {
   process.exit(1);
 }
 
-// Optional: only post to a webhook if you actually have one configured
 const TARGET_WEBHOOK_URL = process.env.TARGET_WEBHOOK_URL || "";
 
 const BAYELSA_BBOX = "5.35,4.25,6.65,5.40";
@@ -18,15 +17,11 @@ const AREA_BBOX = BAYELSA_BBOX;
 const SOURCE = "VIIRS_NOAA20_NRT";
 const DAY_RANGE = 2;
 
-// Dedupe cache: keeps events for 7 days (> DAY_RANGE), then prunes.
-const SEEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const SEEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days > DAY_RANGE
 
-const KNOWN_FLARES = [
-  [4.8512, 6.1234],
-];
-
-const seenEvents = new Map(); // eventId -> timestamp (ms)
-let inFlight = null;          // prevents duplicate concurrent FIRMS calls
+const KNOWN_FLARES = [[4.8512, 6.1234]];
+const seenEvents = new Map(); // eventId -> timestamp
+let inFlight = null;
 
 function isKnownFlare(lat, lon, threshold = 0.005) {
   return KNOWN_FLARES.some(
@@ -41,32 +36,38 @@ function pruneSeen(now = Date.now()) {
   }
 }
 
-function num(v) {
+const num = (v) => {
   const n = parseFloat(v);
   return Number.isFinite(n) ? n : null;
+};
+
+// FIRMS returns plain text on error, CSV on success. Detect both.
+function parseFirmsCsv(csvText) {
+  const cleaned = csvText.replace(/^\uFEFF/, "").trim();
+  const lines = cleaned.split(/\r?\n/).filter((l) => l.trim() !== "");
+
+  if (lines.length === 0) {
+    throw new Error("FIRMS returned an empty body");
+  }
+
+  const headers = lines[0].split(",").map((h) => h.trim().toLowerCase());
+  if (!headers.includes("latitude") || !headers.includes("longitude")) {
+    // Plain-text error like "Invalid MAP_KEY ..." or "Invalid source ..."
+    throw new Error(`FIRMS error response: ${cleaned.slice(0, 300)}`);
+  }
+
+  if (lines.length < 2) return []; // valid CSV, zero rows
+
+  const realHeaders = lines[0].split(",").map((h) => h.trim());
+  return lines.slice(1).map((line) => {
+    const values = line.split(",");
+    return realHeaders.reduce((obj, h, i) => {
+      obj[h] = values[i]?.trim();
+      return obj;
+    }, {});
+  });
 }
 
-function parseCsv(csvText) {
-  const lines = csvText
-    .replace(/^\uFEFF/, "")     // strip BOM
-    .trim()
-    .split(/\r?\n/);            // handle CRLF
-  if (lines.length < 2) return [];
-
-  const headers = lines[0].split(",").map((h) => h.trim());
-  return lines
-    .slice(1)
-    .filter((line) => line.trim() !== "")
-    .map((line) => {
-      const values = line.split(",");
-      return headers.reduce((obj, header, index) => {
-        obj[header] = values[index]?.trim();
-        return obj;
-      }, {});
-    });
-}
-
-// FIRMS acq_time is "HHMM" (e.g. "0042"); build a valid ISO timestamp.
 function toIsoAcqTime(date, time) {
   if (!date || !time) return null;
   const hhmm = String(time).padStart(4, "0");
@@ -81,29 +82,29 @@ async function checkFires() {
     `https://firms.modaps.eosdis.nasa.gov/api/area/csv/` +
     `${encodeURIComponent(FIRMS_MAP_KEY)}/${SOURCE}/${AREA_BBOX}/${DAY_RANGE}`;
 
-  console.log("Fetching:", url);
+  console.log("Fetching:", url.replace(FIRMS_MAP_KEY, "***"));
 
   const response = await fetch(url, { signal: AbortSignal.timeout(30000) });
   if (!response.ok) {
-    throw new Error(`FIRMS API error: ${response.status} ${response.statusText}`);
+    throw new Error(`FIRMS HTTP ${response.status} ${response.statusText}`);
   }
 
   const csvText = await response.text();
-  const rows = parseCsv(csvText);
+  const rows = parseFirmsCsv(csvText);
   console.log(`Total detections found: ${rows.length}`);
 
-  const matches = [];
+  const fires = [];
+  let newCount = 0;
 
   for (const row of rows) {
     const lat = num(row.latitude);
     const lon = num(row.longitude);
     if (lat === null || lon === null) continue;
-
-    const eventId = `${lat}_${lon}_${row.acq_date}_${row.acq_time}`;
-
-    if (seenEvents.has(eventId)) continue;
     if (row.confidence === "l") continue;
     if (isKnownFlare(lat, lon)) continue;
+
+    const eventId = `${lat}_${lon}_${row.acq_date}_${row.acq_time}`;
+    const isNew = !seenEvents.has(eventId);
 
     const payload = {
       latitude: lat,
@@ -113,49 +114,81 @@ async function checkFires() {
       confidence: row.confidence ?? null,
       acquired_at: toIsoAcqTime(row.acq_date, row.acq_time),
       satellite: row.satellite ?? null,
+      is_new: isNew,
     };
 
-    
-    if (TARGET_WEBHOOK_URL) {
+    // Fire webhook only for genuinely new events; if it fails, retry next call.
+    if (isNew && TARGET_WEBHOOK_URL) {
       try {
-        const webhookRes = await fetch(TARGET_WEBHOOK_URL, {
+        const r = await fetch(TARGET_WEBHOOK_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
           signal: AbortSignal.timeout(10000),
         });
-        if (!webhookRes.ok) {
-          console.warn(`Webhook failed for ${eventId}: ${webhookRes.status}`);
-          continue; // do NOT mark as seen → retried next run
+        if (!r.ok) {
+          console.warn(`Webhook ${eventId} -> HTTP ${r.status} (will retry)`);
+          continue; // keep is_new on next call
         }
       } catch (err) {
-        console.warn(`Webhook error for ${eventId}: ${err.message}`);
+        console.warn(`Webhook ${eventId} error: ${err.message} (will retry)`);
         continue;
       }
     }
 
-    // Mark only after it was actually delivered (or if webhook disabled)
-    seenEvents.set(eventId, Date.now());
-    matches.push(payload);
-    console.log("Matched fire payload:", payload);
+    if (isNew) {
+      seenEvents.set(eventId, Date.now());
+      newCount++;
+    }
+    fires.push(payload);
   }
 
-  return matches;
+  return {
+    count: fires.length,
+    new_count: newCount,
+    fires,
+    fetched_at: new Date().toISOString(),
+    area: AREA_BBOX,
+    source: SOURCE,
+    day_range: DAY_RANGE,
+    webhook_enabled: Boolean(TARGET_WEBHOOK_URL),
+  };
 }
 
 app.get("/", async (req, res) => {
   try {
-    // Coalesce concurrent requests into a single FIRMS call
     if (!inFlight) {
       inFlight = checkFires().finally(() => {
         inFlight = null;
       });
     }
-    const data = await inFlight;
-    res.json(data);
+    res.json(await inFlight);
   } catch (error) {
     console.error("Error checking fires:", error.message);
-    res.status(500).json({ error: "Failed to fetch fire data" });
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Raw diagnostic: bypasses filters and dedup, shows what FIRMS actually sent
+app.get("/debug", async (req, res) => {
+  const url =
+    `https://firms.modaps.eosdis.nasa.gov/api/area/csv/` +
+    `${encodeURIComponent(FIRMS_MAP_KEY)}/${SOURCE}/${AREA_BBOX}/${DAY_RANGE}`;
+  try {
+    const r = await fetch(url, { signal: AbortSignal.timeout(30000) });
+    const body = await r.text();
+    const lines = body.split(/\r?\n/);
+    res.json({
+      status: r.status,
+      content_type: r.headers.get("content-type"),
+      bytes: body.length,
+      line_count: lines.length,
+      header: lines[0],
+      preview: body.slice(0, 500),
+      errors: r.ok ? null : body.slice(0, 300),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
