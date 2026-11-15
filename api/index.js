@@ -20,8 +20,8 @@ const TARGET_WEBHOOK_URL = process.env.TARGET_WEBHOOK_URL || "";
 const BAYELSA_BBOX = "5.35,4.25,6.65,5.40";
 const AFRICA_BBOX = "-26.0,-36.0,64.0,38.0";
 
-const AREA_BBOX = "world";
-// const AREA_BBOX = BAYELSA_BBOX;
+// const AREA_BBOX = "world";
+const AREA_BBOX = BAYELSA_BBOX;
 const SOURCE = "VIIRS_NOAA20_NRT";
 const DAY_RANGE = 1;
 

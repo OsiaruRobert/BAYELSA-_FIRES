@@ -1,103 +1,39 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Fire detections</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
-        * {
-            box-sizing: border-box;
-        }
-
-        body {
-            margin: 0;
-            font: 14px/1.4 system-ui, sans-serif;
-        }
-
-        #map {
-            position: absolute;
-            inset: 0;
-        }
-
+        * { box-sizing: border-box; }
+        body { margin: 0; font: 14px/1.4 system-ui, sans-serif; }
+        #map { position: absolute; inset: 0; }
         .panel {
-            position: absolute;
-            z-index: 1000;
-            top: 12px;
-            left: 12px;
-            background: rgba(255, 255, 255, .95);
-            border-radius: 8px;
-            padding: 10px 12px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, .2);
+            position: absolute; z-index: 1000; top: 12px; left: 12px;
+            background: rgba(255, 255, 255, .95); border-radius: 8px;
+            padding: 10px 12px; box-shadow: 0 2px 8px rgba(0, 0, 0, .2);
             max-width: 320px;
         }
-
-        .panel h1 {
-            font-size: 15px;
-            margin: 0 0 6px;
-        }
-
-        .panel .row {
-            display: flex;
-            justify-content: space-between;
-            gap: 8px;
-        }
-
-        .panel .muted {
-            color: #666;
-            font-size: 12px;
-        }
-
+        .panel h1 { font-size: 15px; margin: 0 0 6px; }
+        .panel .row { display: flex; justify-content: space-between; gap: 8px; }
+        .panel .muted { color: #666; font-size: 12px; }
         .panel button {
-            margin-top: 8px;
-            width: 100%;
-            padding: 6px 8px;
-            cursor: pointer;
-            border: 1px solid #ccc;
-            border-radius: 6px;
-            background: #fafafa;
+            margin-top: 8px; width: 100%; padding: 6px 8px; cursor: pointer;
+            border: 1px solid #ccc; border-radius: 6px; background: #fafafa;
         }
-
-        .panel button:hover {
-            background: #f0f0f0;
-        }
-
-        .err {
-            color: #b00020;
-            font-size: 12px;
-            margin-top: 6px;
-            white-space: pre-wrap;
-        }
-
+        .panel button:hover { background: #f0f0f0; }
+        .err { color: #b00020; font-size: 12px; margin-top: 6px; white-space: pre-wrap; }
         .legend {
-            position: absolute;
-            z-index: 1000;
-            bottom: 12px;
-            left: 12px;
-            background: rgba(255, 255, 255, .95);
-            border-radius: 8px;
-            padding: 8px 10px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, .2);
+            position: absolute; z-index: 1000; bottom: 12px; left: 12px;
+            background: rgba(255, 255, 255, .95); border-radius: 8px;
+            padding: 8px 10px; box-shadow: 0 2px 8px rgba(0, 0, 0, .2);
             font-size: 12px;
         }
-
-        .legend span {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            margin-right: 10px;
-        }
-
-        .dot {
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-            display: inline-block;
-        }
+        .legend span { display: inline-flex; align-items: center; gap: 4px; margin-right: 10px; }
+        .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
     </style>
 </head>
-
 <body>
     <div id="map"></div>
 
@@ -140,7 +76,6 @@
                 map.fitBounds(L.latLngBounds(latlngs).pad(0.25));
                 return;
             }
-            // Fallback: fit the configured bbox rectangle
             if (bboxStr) {
                 const [s, w, n, e] = bboxStr.split(",").map(Number);
                 if ([s, w, n, e].every(Number.isFinite)) {
@@ -182,7 +117,6 @@
                     latlngs.push(ll);
                     const color = colorFor(f.confidence);
 
-                    // Marker radius scales a bit with FRP, capped so it stays clickable
                     const radius = Math.max(6, Math.min(18, 6 + (f.frp_mw || 0) / 5));
 
                     L.circleMarker(ll, {
@@ -217,8 +151,7 @@
         document.getElementById("refresh").addEventListener("click", load);
 
         load();
-        setInterval(load, 60_000); // auto-refresh every minute
+        setInterval(load, 60_000);
     </script>
 </body>
-
 </html>
