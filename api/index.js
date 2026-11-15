@@ -1,11 +1,15 @@
-// const FIRMS_MAP_KEY = "PASTE_YOUR_ACTUAL_MAP_KEY_HERE";
+import express from "express";
+const app = express();
+
+
+const FIRMS_MAP_KEY = process.env.FIRMS_MAP_KEY;
 const TARGET_WEBHOOK_URL = "https://example.com"; // Replace with your webhook URL when ready
 
 const BAYELSA_BBOX = "5.35,4.25,6.65,5.40";
 const AFRICA_BBOX = "-26.0,-36.0,64.0,38.0";
 
 // Use AFRICA_BBOX first to verify you get live rows, then switch to BAYELSA_BBOX
-const AREA_BBOX = "world";
+const AREA_BBOX = BAYELSA_BBOX;
 const SOURCE = "VIIRS_NOAA20_NRT";
 const DAY_RANGE = 2;
 
@@ -37,7 +41,7 @@ function parseCsv(csvText) {
 }
 
 async function checkFires() {
-//area_url = '' + MAP_KEY + '/VIIRS_NOAA20_NRT/world/1'
+  //area_url = '' + MAP_KEY + '/VIIRS_NOAA20_NRT/world/1'
   const url = `https://firms.modaps.eosdis.nasa.gov/api/area/csv/${FIRMS_MAP_KEY}/${SOURCE}/${AREA_BBOX}/${DAY_RANGE}`;
 
   console.log("Fetching:", url);
@@ -57,7 +61,7 @@ async function checkFires() {
     } else {
       console.log("Raw response:", csvText);
     }
-
+    const dataaa = [];
     for (const row of rows) {
       const lat = parseFloat(row.latitude);
       const lon = parseFloat(row.longitude);
@@ -81,6 +85,7 @@ async function checkFires() {
 
       console.log("Matched fire payload:", payload);
 
+      dataaa.push(payload);
       // Uncomment below when TARGET_WEBHOOK_URL is set to your real endpoint:
       /*
       const webhookRes = await fetch(TARGET_WEBHOOK_URL, {
@@ -92,9 +97,24 @@ async function checkFires() {
       console.log(`Webhook status for ${eventId}: ${webhookRes.status}`);
       */
     }
+    return dataaa;
+
   } catch (error) {
     console.error("Error checking fires:", error.message);
   }
 }
 
-checkFires();
+app.get("/", (req, res) => {
+  try {
+
+
+    const data = checkFires();
+    res.json(data);
+  } catch (error) {
+    res.json({
+      "m": "fafaf"
+    });
+  }
+})
+
+app.listen(process.env.PORT || 2000, () => console.log("Running..."));
