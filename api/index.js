@@ -109,7 +109,7 @@ app.get("/", async (req, res) => {
 
 
     const data = await checkFires();
-    res.json(data);
+    res.json({ data });
   } catch (error) {
     res.json({
       "m": "fafaf"
